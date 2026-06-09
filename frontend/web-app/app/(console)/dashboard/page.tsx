@@ -1,5 +1,5 @@
-import { MissionControlDashboard } from "@/components/polisai/mission-control-dashboard";
+import { Workspace } from "@/components/polisai/workspace";
 
 export default function DashboardPage() {
-  return <MissionControlDashboard />;
+  return <Workspace />;
 }
