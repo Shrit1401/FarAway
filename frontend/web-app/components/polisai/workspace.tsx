@@ -12,7 +12,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { IsometricCity } from "@/components/polisai/isometric-city";
+import dynamic from "next/dynamic";
+const ThreeCity = dynamic(
+  () => import("@/components/polisai/three-city").then(m => m.ThreeCity),
+  { ssr: false, loading: () => <div className="h-full w-full bg-[#0d1e33]" /> }
+);
 import { SimSelector } from "@/components/polisai/sim-selector";
 import { apiGet, apiPost, getToken } from "@/lib/api";
 import { connectSimWs } from "@/lib/ws";
@@ -63,6 +67,22 @@ const toneMap: Record<string, string> = {
   signal: "bg-city-signal/10 text-city-signal",
   solar:  "bg-city-solar/[0.15] text-[#8A5A00]",
 };
+
+// Pull the most useful string out of any backend response object
+function extractText(r: Record<string, unknown>): string {
+  // Prefer known text keys
+  for (const key of ["explanation", "summary", "recommendations", "text", "content", "message", "body", "result"]) {
+    const v = r[key];
+    if (typeof v === "string" && v.length > 0) return v;
+  }
+  // Fall back to prettified JSON but strip outer wrapper keys if they're just IDs
+  const stripped = Object.fromEntries(
+    Object.entries(r).filter(([k]) => !["sim_id", "sim_name", "tick", "id"].includes(k))
+  );
+  const remaining = Object.values(stripped);
+  if (remaining.length === 1 && typeof remaining[0] === "string") return remaining[0] as string;
+  return JSON.stringify(stripped, null, 2).slice(0, 800);
+}
 
 function routeMessage(text: string): string {
   const t = text.toLowerCase();
@@ -206,23 +226,25 @@ export function Workspace() {
       else if (ep === "ctrl:tick")  { await simControl("tick");  reply = "↗ Advanced **one tick**."; }
       else if (ep === "explain") {
         const r = await apiPost<Record<string, unknown>>(`/api/v1/ai/simulations/${simId}/explain`);
-        reply = String(r.explanation ?? r.summary ?? r.text ?? r.content ?? JSON.stringify(r, null, 2));
+        reply = extractText(r);
       }
       else if (ep === "recommend") {
-        const r = await apiPost<{ recommendations?: unknown[]; text?: string; content?: string }>(
+        const r = await apiPost<{ recommendations?: unknown; text?: string; content?: string }>(
           `/api/v1/ai/simulations/${simId}/recommend`
         );
-        if (Array.isArray(r.recommendations)) {
-          reply = r.recommendations.map((x, i) => `${i + 1}. ${typeof x === "object" ? JSON.stringify(x) : x}`).join("\n\n");
+        if (typeof r.recommendations === "string") {
+          reply = r.recommendations;
+        } else if (Array.isArray(r.recommendations)) {
+          reply = r.recommendations.map((x, i) => `${i + 1}. ${typeof x === "object" ? JSON.stringify(x) : String(x)}`).join("\n\n");
         } else {
-          reply = String(r.text ?? r.content ?? JSON.stringify(r, null, 2));
+          reply = extractText(r);
         }
       }
       else if (ep === "news") {
-        const r = await apiPost<{ headline?: string; body?: string; text?: string; content?: string }>(
-          `/api/v1/ai/simulations/${simId}/news`
-        );
-        reply = r.headline ? `📰 **${r.headline}**\n\n${r.body ?? ""}` : String(r.text ?? r.content ?? JSON.stringify(r));
+        const r = await apiPost<Record<string, unknown>>(`/api/v1/ai/simulations/${simId}/news`);
+        const headline = r.headline as string | undefined;
+        const body = (r.body ?? r.content ?? r.text) as string | undefined;
+        reply = headline ? `📰 **${headline}**\n\n${body ?? ""}` : extractText(r);
       }
       else if (ep === "analytics") {
         const r = await apiGet<AnalyticsData>(`/api/v1/analytics?sim_id=${simId}`);
@@ -401,7 +423,7 @@ export function Workspace() {
 
         {/* City canvas (left) */}
         <div className="relative flex-1 overflow-hidden">
-          <IsometricCity tick={tick} status={simStatus} />
+          <ThreeCity tick={tick} status={simStatus} />
 
           {/* Tick badge overlaid */}
           <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-lg border border-white/60 bg-black/40 px-2.5 py-1.5 backdrop-blur-md">
@@ -420,7 +442,7 @@ export function Workspace() {
         </div>
 
         {/* ── Chat panel (right) ──────────────────────────────────────────── */}
-        <div className="flex w-[340px] shrink-0 flex-col border-l border-border/70 bg-white/[0.94] backdrop-blur-xl xl:w-[380px]">
+        <div className="flex w-[420px] shrink-0 flex-col border-l border-border/70 bg-white/[0.94] backdrop-blur-xl xl:w-[480px]">
 
           {/* Chat header */}
           <div className="flex items-center gap-2 border-b border-border/60 px-4 py-2.5">
