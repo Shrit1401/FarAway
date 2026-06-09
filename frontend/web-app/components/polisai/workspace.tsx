@@ -71,7 +71,7 @@ const toneMap: Record<string, string> = {
 // Pull the most useful string out of any backend response object
 function extractText(r: Record<string, unknown>): string {
   // Prefer known text keys
-  for (const key of ["explanation", "summary", "recommendations", "text", "content", "message", "body", "result"]) {
+  for (const key of ["explanation", "summary", "recommendations", "article", "text", "content", "message", "body", "result", "response", "output", "data"]) {
     const v = r[key];
     if (typeof v === "string" && v.length > 0) return v;
   }
@@ -123,10 +123,11 @@ export function Workspace() {
   const { user, logout } = useAuth();
   const { simId, simName } = useSim();
 
-  const [simStatus, setSimStatus] = useState<SimStatus>("draft");
-  const [tick, setTick]           = useState(0);
-  const [kpis, setKpis]           = useState<Kpi[]>([]);
-  const [ctrlBusy, setCtrlBusy]   = useState(false);
+  const [simStatus, setSimStatus]   = useState<SimStatus>("draft");
+  const [tick, setTick]             = useState(0);
+  const [kpis, setKpis]             = useState<Kpi[]>([]);
+  const [cityMood, setCityMood]     = useState({ happiness: 50, health: 50 });
+  const [ctrlBusy, setCtrlBusy]     = useState(false);
 
   const [messages, setMessages]   = useState<ChatMsg[]>([
     {
@@ -148,6 +149,11 @@ export function Workspace() {
     try {
       const data = await apiGet<AnalyticsData>(`/api/v1/analytics?sim_id=${simId}`);
       setKpis(parseKpis(data));
+      const k = (data.kpis ?? data) as Record<string, unknown>;
+      setCityMood({
+        happiness: typeof k.happiness === "number" ? k.happiness : 50,
+        health:    typeof k.health    === "number" ? k.health    : 50,
+      });
     } catch {}
   }, [simId]);
 
@@ -244,7 +250,15 @@ export function Workspace() {
         const r = await apiPost<Record<string, unknown>>(`/api/v1/ai/simulations/${simId}/news`);
         const headline = r.headline as string | undefined;
         const body = (r.body ?? r.content ?? r.text) as string | undefined;
-        reply = headline ? `📰 **${headline}**\n\n${body ?? ""}` : extractText(r);
+        const article = r.article as string | undefined;
+        if (headline) {
+          reply = `📰 **${headline}**\n\n${body ?? ""}`;
+        } else if (article) {
+          // article may contain \n\n as literal chars — unescape them
+          reply = article.replace(/\\n/g, "\n");
+        } else {
+          reply = extractText(r);
+        }
       }
       else if (ep === "analytics") {
         const r = await apiGet<AnalyticsData>(`/api/v1/analytics?sim_id=${simId}`);
@@ -423,7 +437,7 @@ export function Workspace() {
 
         {/* City canvas (left) */}
         <div className="relative flex-1 overflow-hidden">
-          <ThreeCity tick={tick} status={simStatus} />
+          <ThreeCity tick={tick} status={simStatus} happiness={cityMood.happiness} health={cityMood.health} />
 
           {/* Tick badge overlaid */}
           <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-lg border border-white/60 bg-black/40 px-2.5 py-1.5 backdrop-blur-md">

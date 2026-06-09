@@ -328,26 +328,57 @@ function BuildingMesh({ b }: { b: B3D }) {
 }
 
 // ─── Citizens ──────────────────────────────────────────────────────────────────
-function Citizens({ running }: { running: boolean }) {
-  const statesRef = useRef<Cit[]>(CITS.map(c => ({ ...c })));
-  const groupsRef = useRef<(THREE.Group | null)[]>([]);
-  const tmpDir    = useRef(new THREE.Vector3());
-  const tmpPos    = useRef(new THREE.Vector3());
+// Emotion color palette: happy=cyan/green, neutral=orange/yellow, unhappy=purple/gray
+function moodColor(happiness: number, base: string): string {
+  if (happiness >= 70) return base;             // keep vibrant original color
+  if (happiness >= 45) return "#E8A030";         // amber — stressed
+  return "#9870B8";                              // muted purple — unhappy
+}
 
-  useFrame((_, raw) => {
-    if (!running) return;
-    const dt = Math.min(raw, 0.05);
+function Citizens({ running, happiness, health }: {
+  running: boolean;
+  happiness: number;
+  health: number;
+}) {
+  const statesRef  = useRef<Cit[]>(CITS.map(c => ({ ...c })));
+  const groupsRef  = useRef<(THREE.Group | null)[]>([]);
+  const headRefs   = useRef<(THREE.Mesh | null)[]>([]);
+  const haloRefs   = useRef<(THREE.Mesh | null)[]>([]);
+  const tmpDir     = useRef(new THREE.Vector3());
+  const tmpPos     = useRef(new THREE.Vector3());
+
+  // Emotion drives speed:
+  //   happiness 0→100 maps to 0.35→1.5× multiplier
+  //   health    0→100 maps to 0.6→1.1× multiplier
+  //   unhappy citizens also pause/shuffle (low bounce)
+  const happyMult = 0.35 + (happiness / 100) * 1.15;
+  const healthMult = 0.6  + (health    / 100) * 0.5;
+  const speedMult  = happyMult * healthMult;
+
+  useFrame((state, raw) => {
+    const dt   = Math.min(raw, 0.05);
+    const t    = state.clock.elapsedTime;
+    // City-wide pace — always some movement; scale up when running
+    const pace = running ? speedMult : speedMult * 0.22;
 
     for (let i = 0; i < statesRef.current.length; i++) {
       const c = statesRef.current[i];
       const g = groupsRef.current[i];
       if (!g) continue;
 
-      c.t += c.speed * dt * c.dir;
+      c.t += c.speed * dt * c.dir * pace;
       if (c.t > 1) { c.t = 1; c.dir = -1; }
       else if (c.t < 0) { c.t = 0; c.dir = 1; }
 
       tmpPos.current.lerpVectors(c.start, c.end, c.t);
+
+      // Vertical bob: happy = bouncy, unhappy = flat shuffle
+      if (!c.isVehicle) {
+        const bobAmp  = happiness >= 65 ? 0.06 : happiness >= 45 ? 0.025 : 0.008;
+        const bobFreq = happiness >= 65 ? 7    : happiness >= 45 ? 5     : 3;
+        tmpPos.current.y = c.start.y + Math.abs(Math.sin(t * bobFreq + i * 1.3)) * bobAmp;
+      }
+
       g.position.copy(tmpPos.current);
 
       // Face direction of travel
@@ -356,13 +387,34 @@ function Citizens({ running }: { running: boolean }) {
       if (tmpDir.current.lengthSq() > 0.001) {
         g.rotation.y = Math.atan2(tmpDir.current.x, tmpDir.current.z);
       }
+
+      // Update head emissive to reflect mood dynamically
+      const head = headRefs.current[i];
+      if (head) {
+        const mat = head.material as THREE.MeshStandardMaterial;
+        // Pulse glow when happy; dim when unhappy
+        const glow = happiness >= 65
+          ? 0.35 + Math.sin(t * 3 + i) * 0.15
+          : happiness >= 45
+          ? 0.15
+          : 0.05;
+        mat.emissiveIntensity = glow;
+      }
+
+      // Halo opacity shrinks with unhappiness
+      const halo = haloRefs.current[i];
+      if (halo) {
+        const mat = halo.material as THREE.MeshBasicMaterial;
+        mat.opacity = happiness >= 65 ? 0.18 : happiness >= 45 ? 0.08 : 0.03;
+      }
     }
   });
 
   return (
     <>
       {CITS.map((c, i) => {
-        const init = new THREE.Vector3().lerpVectors(c.start, c.end, c.t);
+        const init  = new THREE.Vector3().lerpVectors(c.start, c.end, c.t);
+        const color = c.isVehicle ? c.color : moodColor(happiness, c.color);
         return (
           <group
             key={i}
@@ -370,17 +422,15 @@ function Citizens({ running }: { running: boolean }) {
             position={[init.x, init.y, init.z]}
           >
             {c.isVehicle ? (
-              // Vehicle: box shape
               <>
                 <mesh position={[0, 0.07, 0]} castShadow>
                   <boxGeometry args={[0.28, 0.14, 0.52]} />
-                  <meshStandardMaterial color={c.color} metalness={0.5} roughness={0.3} />
+                  <meshStandardMaterial color={color} metalness={0.5} roughness={0.3} />
                 </mesh>
                 <mesh position={[0, 0.16, 0.05]} castShadow>
                   <boxGeometry args={[0.22, 0.1, 0.3]} />
-                  <meshStandardMaterial color={c.color} metalness={0.4} roughness={0.4} transparent opacity={0.85} />
+                  <meshStandardMaterial color={color} metalness={0.4} roughness={0.4} transparent opacity={0.85} />
                 </mesh>
-                {/* Headlights */}
                 <mesh position={[0.08, 0.07, 0.26]}>
                   <sphereGeometry args={[0.04, 6, 6]} />
                   <meshStandardMaterial color="#FFFFF0" emissive="#FFFF80" emissiveIntensity={1.5} />
@@ -391,24 +441,37 @@ function Citizens({ running }: { running: boolean }) {
                 </mesh>
               </>
             ) : (
-              // Pedestrian: sphere head + cylinder body
               <>
-                <mesh position={[0, 0.22, 0]} castShadow>
+                {/* Head — color + glow reflects happiness */}
+                <mesh
+                  position={[0, 0.22, 0]}
+                  castShadow
+                  ref={(r) => { headRefs.current[i] = r; }}
+                >
                   <sphereGeometry args={[0.09, 8, 8]} />
-                  <meshStandardMaterial
-                    color={c.color}
-                    emissive={c.color}
-                    emissiveIntensity={0.4}
-                  />
+                  <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.4} />
                 </mesh>
+                {/* Body */}
                 <mesh position={[0, 0.09, 0]} castShadow>
                   <cylinderGeometry args={[0.055, 0.07, 0.24, 8]} />
-                  <meshStandardMaterial color={c.color} emissive={c.color} emissiveIntensity={0.2} />
+                  <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.15} />
                 </mesh>
-                {/* Glow halo */}
-                <mesh position={[0, 0.22, 0]}>
-                  <sphereGeometry args={[0.14, 8, 8]} />
-                  <meshBasicMaterial color={c.color} transparent opacity={0.15} />
+                {/* Mood halo */}
+                <mesh
+                  position={[0, 0.22, 0]}
+                  ref={(r) => { haloRefs.current[i] = r; }}
+                >
+                  <sphereGeometry args={[0.16, 8, 8]} />
+                  <meshBasicMaterial color={color} transparent opacity={0.18} />
+                </mesh>
+                {/* Tiny mood indicator dot floating above head */}
+                <mesh position={[0, 0.38, 0]}>
+                  <sphereGeometry args={[0.035, 6, 6]} />
+                  <meshStandardMaterial
+                    color={happiness >= 65 ? "#50FF80" : happiness >= 45 ? "#FFB020" : "#FF5050"}
+                    emissive={happiness >= 65 ? "#30FF60" : happiness >= 45 ? "#FF9000" : "#FF3030"}
+                    emissiveIntensity={0.9}
+                  />
                 </mesh>
               </>
             )}
@@ -497,7 +560,7 @@ function FactorySmoke({ running }: { running: boolean }) {
 }
 
 // ─── Scene ─────────────────────────────────────────────────────────────────────
-function CityScene({ running }: { running: boolean }) {
+function CityScene({ running, happiness, health }: { running: boolean; happiness: number; health: number }) {
   return (
     <>
       {/* Atmosphere */}
@@ -532,7 +595,7 @@ function CityScene({ running }: { running: boolean }) {
       {BLDGS.map((b, i) => <BuildingMesh key={i} b={b} />)}
 
       {/* Dynamic */}
-      <Citizens running={running} />
+      <Citizens running={running} happiness={happiness} health={health} />
       <FactorySmoke running={running} />
     </>
   );
@@ -542,9 +605,13 @@ function CityScene({ running }: { running: boolean }) {
 export function ThreeCity({
   tick,
   status,
+  happiness = 50,
+  health = 50,
 }: {
   tick: number;
   status: "draft" | "running" | "paused" | "completed";
+  happiness?: number;
+  health?: number;
 }) {
   const running = status === "running";
 
@@ -555,7 +622,7 @@ export function ThreeCity({
         camera={{ position: [22, 20, 22], fov: 38, near: 0.5, far: 150 }}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.1 }}
       >
-        <CityScene running={running} />
+        <CityScene running={running} happiness={happiness} health={health} />
         <OrbitControls
           target={[0, 1, 0]}
           minDistance={10}
