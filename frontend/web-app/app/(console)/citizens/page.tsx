@@ -1,5 +1,2 @@
-import { AICivilizationDashboard } from "@/components/polisai/ai-civilization-dashboard";
-
-export default function CitizensPage() {
-  return <AICivilizationDashboard />;
-}
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/dashboard"); }

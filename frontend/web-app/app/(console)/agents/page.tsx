@@ -1,5 +1,2 @@
-import { AIAgentCollaboration } from "@/components/polisai/ai-agent-collaboration";
-
-export default function AgentsPage() {
-  return <AIAgentCollaboration />;
-}
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/dashboard"); }

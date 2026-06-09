@@ -1,5 +1,2 @@
-import { AiNewsCenter } from "@/components/polisai/ai-news-center";
-
-export default function NewsPage() {
-  return <AiNewsCenter />;
-}
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/dashboard"); }

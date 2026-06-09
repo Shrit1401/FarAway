@@ -1,5 +1,2 @@
-import { AdvancedAnalyticsDashboard } from "@/components/polisai/advanced-analytics-dashboard";
-
-export default function AnalyticsPage() {
-  return <AdvancedAnalyticsDashboard />;
-}
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/dashboard"); }

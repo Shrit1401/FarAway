@@ -1,5 +1,2 @@
-import { PolicyBuilder } from "@/components/polisai/policy-builder";
-
-export default function PoliciesPage() {
-  return <PolicyBuilder />;
-}
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/dashboard"); }

@@ -1,5 +1,2 @@
-import { LiveCitySimulation } from "@/components/polisai/live-city-simulation";
-
-export default function SimulationPage() {
-  return <LiveCitySimulation />;
-}
+import { redirect } from "next/navigation";
+export default function Page() { redirect("/dashboard"); }
