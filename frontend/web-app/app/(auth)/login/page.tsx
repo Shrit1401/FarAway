@@ -119,8 +119,9 @@ export default function LoginPage() {
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder={tab === "register" ? "Min 8 chars, 1 uppercase, 1 digit" : "••••••••"}
                   required
+                  minLength={tab === "register" ? 8 : undefined}
                   autoComplete={tab === "login" ? "current-password" : "new-password"}
                   className="pr-10"
                 />
