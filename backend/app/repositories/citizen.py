@@ -43,17 +43,31 @@ class CitizenRepository(BaseRepository):
         r = await (
             self._table()
             .select(
-                "id, age, income, wealth, happiness_score, health_score, "
+                "id, first_name, last_name, age, gender, region, "
+                "income, wealth, happiness_score, health_score, "
                 "stress_score, education_level, political_alignment, "
                 "voting_likelihood, occupation, personality_traits, "
-                "demographics, is_alive"
+                "demographics, is_alive, "
+                "citizen_employment(role, salary, is_active, businesses(name))"
             )
             .eq("simulation_id", sim_id)
             .eq("is_alive", True)
             .range(offset, offset + page_size - 1)
             .execute()
         )
-        return r.data or []
+        rows = r.data or []
+        for row in rows:
+            # Flatten workplace from active employment join
+            employment = row.pop("citizen_employment", []) or []
+            active = next((e for e in employment if e.get("is_active")), None)
+            row["workplace"] = (
+                active["businesses"]["name"] if active and active.get("businesses") else None
+            )
+            row["job_role"] = active["role"] if active else None
+            # Flatten home from demographics district
+            demo = row.get("demographics") or {}
+            row["home"] = demo.get("district") or row.get("region")
+        return rows
 
     async def get_sample(self, sim_id: str, n: int = 50) -> list[dict]:
         """Return up to n citizens for sampling (agent context)."""
