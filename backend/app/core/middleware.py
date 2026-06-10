@@ -77,14 +77,27 @@ def register_middleware(app: FastAPI, settings) -> None:  # type: ignore[no-unty
     app.add_middleware(RequestLoggingMiddleware)
     app.add_middleware(RequestContextMiddleware)
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.allowed_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Request-ID", "X-Process-Time"],
-    )
+    origins = settings.allowed_origins
+    # ["*"] + allow_credentials=True is rejected by browsers — use
+    # allow_origin_regex to echo back the requesting origin instead.
+    if origins == ["*"]:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=".*",
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID", "X-Process-Time"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Request-ID", "X-Process-Time"],
+        )
 
     if settings.is_production:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
