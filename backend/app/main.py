@@ -1,5 +1,5 @@
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
@@ -43,6 +43,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await get_broadcaster().startup()
     logger.info("broadcaster_initialized")
 
+    # Rehydrate simulations that were "running" before this process started.
+    # The scheduler holds tasks in memory only, so after a restart/redeploy any
+    # DB row with status="running" is a zombie until a scheduler task is attached.
+    await _rehydrate_running_simulations(logger)
+
     logger.info("startup_complete")
     yield
 
@@ -58,6 +63,53 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await get_cache().shutdown()
     await close_supabase()
     logger.info("shutdown_complete")
+
+
+async def _rehydrate_running_simulations(logger) -> None:
+    """
+    On startup, re-attach a scheduler task for every simulation the DB still
+    marks as running. Fully defensive: a failure to rehydrate one simulation
+    never blocks application startup.
+    """
+    try:
+        from app.db.supabase import get_supabase_admin
+        from app.services.simulation.engine import SimulationEngine
+        from app.services.simulation.scheduler import get_scheduler
+        from app.services.simulation.state_manager import StateManager
+
+        db = get_supabase_admin()
+        rows = await (
+            db.table("simulations")
+            .select("id, tick_rate")
+            .eq("status", "running")
+            .execute()
+        )
+        running = rows.data or []
+        if not running:
+            logger.info("rehydrate_none")
+            return
+
+        scheduler = get_scheduler()
+        restored = 0
+        for sim in running:
+            sim_id = sim["id"]
+            if scheduler.is_running(sim_id):
+                continue
+            try:
+                sm = StateManager(db)
+                engine = SimulationEngine(sm)
+                await scheduler.start(
+                    sim_id,
+                    engine,
+                    sm,
+                    tick_rate=sim.get("tick_rate", 1) or 1,
+                )
+                restored += 1
+            except Exception as exc:
+                logger.warning("rehydrate_sim_failed", sim_id=sim_id, error=str(exc))
+        logger.info("rehydrate_complete", restored=restored, total=len(running))
+    except Exception as exc:
+        logger.warning("rehydrate_failed", error=str(exc))
 
 
 def create_app() -> FastAPI:

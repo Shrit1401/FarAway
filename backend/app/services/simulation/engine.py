@@ -21,11 +21,13 @@ import random
 
 from app.core.logging import get_logger
 from app.services.simulation.citizen_processor import CitizenProcessor
-from app.services.simulation.citizen_behavior import CitizenDelta
 from app.services.simulation.election_engine import ElectionEngine
 from app.services.simulation.state_manager import StateManager
 
 logger = get_logger(__name__)
+
+# Run the domain agents + news agent every N ticks. Set to 0 to disable.
+_AGENT_INTERVAL = 5
 
 
 class SimulationEngine:
@@ -112,7 +114,104 @@ class SimulationEngine:
         except Exception as _ws_err:
             logger.warning("tick_ws_broadcast_error", error=str(_ws_err))
 
+        # Domain agents + news feed run out of band from the citizen processor.
+        # A failure here must never stop the simulation from advancing.
+        if _AGENT_INTERVAL > 0 and tick % _AGENT_INTERVAL == 0:
+            try:
+                await self._run_agents(sim_id, tick, sim, gov, metrics)
+            except Exception as exc:
+                logger.warning("tick_agents_error", sim_id=sim_id, tick=tick, error=str(exc))
+
         return metrics
+
+    async def _run_agents(
+        self,
+        sim_id: str,
+        tick: int,
+        sim: dict,
+        gov: dict | None,
+        metrics: dict,
+    ) -> None:
+        """
+        Run domain agents + news against the current state and broadcast their
+        insights, alerts, and headlines over the agents channel.
+
+        This is a read-only analysis layer; it does not mutate citizen state.
+        """
+        from app.agents.base import AgentContext, MessageType
+        from app.agents.orchestrator import AgentOrchestrator
+        from app.agents.registry import get_registry
+        from app.ws.broadcaster import get_broadcaster
+
+        registry = get_registry()
+        if len(registry) == 0:
+            return
+
+        db = self._sm._db
+        pol_r = await (
+            db.table("policies")
+            .select("*")
+            .eq("simulation_id", sim_id)
+            .eq("status", "active")
+            .execute()
+        )
+        evt_r = await (
+            db.table("events")
+            .select("*")
+            .eq("simulation_id", sim_id)
+            .eq("is_active", True)
+            .execute()
+        )
+        cit_r = await (
+            db.table("citizens")
+            .select(
+                "id,age,income,wealth,happiness_score,health_score,stress_score,"
+                "education_level,political_alignment"
+            )
+            .eq("simulation_id", sim_id)
+            .eq("is_alive", True)
+            .limit(200)
+            .execute()
+        )
+
+        ctx = AgentContext(
+            sim_id=sim_id,
+            tick=tick,
+            simulation=sim,
+            government=gov or {},
+            active_policies=pol_r.data or [],
+            active_events=evt_r.data or [],
+            last_metrics=metrics,
+            citizen_sample=cit_r.data or [],
+        )
+        report = await AgentOrchestrator(registry).run_tick(ctx, timeout_seconds=12.0)
+
+        broadcaster = get_broadcaster()
+        if report.all_insights or report.all_alerts:
+            await broadcaster.publish_agent_insights(
+                sim_id,
+                tick,
+                report.all_insights,
+                report.all_alerts,
+            )
+
+        news_payload = next(
+            (
+                msg.payload
+                for r in report.agent_results
+                if r.agent_id == "news" and r.messages
+                for msg in r.messages
+                if msg.type == MessageType.NEWS_BROADCAST
+            ),
+            None,
+        )
+        if news_payload:
+            await broadcaster.publish_news(
+                sim_id,
+                tick,
+                news_payload.get("headlines", []),
+                float(news_payload.get("sentiment_index", 50.0)),
+            )
 
     async def _tick_world(self, sim_id: str, metrics: dict) -> None:
         """Degrade infrastructure quality and adjust institution utilization each tick."""

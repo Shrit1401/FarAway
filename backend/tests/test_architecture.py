@@ -369,25 +369,21 @@ class TestSchedulerShutdown:
         sched = SimulationScheduler()
         await sched.shutdown_all()   # should not raise
 
-    async def test_shutdown_all_pauses_running(self):
+    async def test_shutdown_all_cancels_running_without_pausing(self):
         from app.services.simulation.scheduler import SimulationScheduler
 
         sched = SimulationScheduler()
-        pause_calls = []
 
         async def _fake_pause(sim_id, state):
-            pause_calls.append(sim_id)
+            raise AssertionError("shutdown_all should not persist a paused status")
 
         sched.pause = _fake_pause
         # Manually inject a fake running task
         sched._tasks["sim-X"] = asyncio.create_task(asyncio.sleep(999))
 
-        with patch("app.db.supabase.get_supabase_admin", return_value=MagicMock()):
-            with patch("app.services.simulation.state_manager.StateManager"):
-                await sched.shutdown_all()
+        await sched.shutdown_all()
 
-        sched._tasks.get("sim-X") and sched._tasks["sim-X"].cancel()
-        assert "sim-X" in pause_calls
+        assert "sim-X" not in sched._tasks
 
 
 # ── core/dependencies.py ──────────────────────────────────────────────────────

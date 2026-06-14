@@ -1,4 +1,4 @@
-const WS_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000").replace(
+const WS_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "https://keeps-larger-doubt-diploma.trycloudflare.com").replace(
   /^https?/,
   (p) => (p === "https" ? "wss" : "ws")
 );

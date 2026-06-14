@@ -4,11 +4,12 @@ Scheduler — manages background asyncio tasks, one per running simulation.
 Production features:
   - Transient tick errors are retried with exponential backoff (max 3 attempts)
   - Permanent failures set status=failed and cancel the task
-  - shutdown() gracefully pauses ALL running simulations (call on app shutdown)
+  - shutdown_all() cancels local tasks while preserving DB running state
   - Task timeout: stuck ticks are cancelled after TICK_TIMEOUT_SECONDS
 """
 
 import asyncio
+from contextlib import suppress
 
 from app.core.logging import get_logger
 from app.services.simulation.engine import SimulationEngine
@@ -66,23 +67,18 @@ class SimulationScheduler:
         task = self._tasks.pop(sim_id, None)
         if task and not task.done():
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
     async def shutdown_all(self) -> None:
-        """Gracefully pause all running simulations. Call on app shutdown."""
+        """Cancel all local scheduler tasks without changing persisted status."""
         running = list(self._tasks.keys())
         if not running:
             return
         logger.info("scheduler_shutdown_start", count=len(running))
-        from app.db.supabase import get_supabase_admin
-        db = get_supabase_admin()
-        sm = StateManager(db)
         for sim_id in running:
             try:
-                await self.pause(sim_id, sm)
+                await self._cancel(sim_id)
             except Exception as exc:
                 logger.warning("scheduler_shutdown_error", sim_id=sim_id, error=str(exc))
         logger.info("scheduler_shutdown_complete")
@@ -113,7 +109,7 @@ class SimulationScheduler:
                     ticks_run += 1
                     retry_count = 0   # reset on success
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.error("tick_timeout", sim_id=sim_id, tick=ticks_run)
                     await state.set_simulation_status(sim_id, "failed")
                     break
