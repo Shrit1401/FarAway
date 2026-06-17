@@ -27,7 +27,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new Error(body?.detail ?? `${res.status} ${res.statusText}`);
+    throw new Error(body?.error?.message ?? body?.detail ?? `${res.status} ${res.statusText}`);
   }
   const text = await res.text();
   return text ? (JSON.parse(text) as T) : (undefined as T);
